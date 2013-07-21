@@ -53,10 +53,13 @@ class HuboMarkerTeleop:
             self.right_gripper_handler.insert(menu_option, callback=self.r_gripper_feedback_cb)
             i += 1
         # Compute the start poses
+        rospy.loginfo("Getting start poses of the end effectors...")
         self.listener = tf.TransformListener()
         self.base_frame = "/Body_Torso"
-        [ltrans,lrot] = self.listener.lookupTransform(self.base_frame, "/Body_LWR", rospy.Time(0))
-        [rtrans,rrot] = self.listener.lookupTransform(self.base_frame, "/Body_RWR", rospy.Time(0))
+        t1 = self.tf.getLatestCommonTime(self.base_frame, "/Body_LWR")
+        t2 = self.tf.getLatestCommonTime(self.base_frame, "/Body_RWR")
+        [ltrans,lrot] = self.listener.lookupTransform(self.base_frame, "/Body_LWR", t1)
+        [rtrans,rrot] = self.listener.lookupTransform(self.base_frame, "/Body_RWR", t2)
         start_left_pose = PoseFromTransform(TransformFromComponents(ltrans, lrot))
         start_right_pose = PoseFromTransform(TransformFromComponents(rtrans, rrot))
         # Set the default poses
@@ -66,7 +69,9 @@ class HuboMarkerTeleop:
         self.right_arm_pose = PoseStamped()
         self.right_arm_pose.header.frame_id = self.base_frame
         self.right_arm_pose.pose = start_right_pose
+        rospy.loginfo("...Set start end effector poses")
         # Set up the control clients for arms and grippers
+        rospy.loginfo("Setting up action clients...")
         self.left_arm_client = actionlib.SimpleActionClient(arm_action_prefix + "/left_arm/end_effector_pose_action", EndEffectorPoseAction)
         self.left_arm_client.wait_for_server()
         self.right_arm_client = actionlib.SimpleActionClient(arm_action_prefix + "/right_arm/end_effector_pose_action", EndEffectorPoseAction)
@@ -364,7 +369,6 @@ class HuboMarkerTeleop:
         new_marker.pose = marker_pose.pose
         new_marker.scale = 0.25
         new_marker.name = marker_name
-        
         # Make the default control for the marker itself
         base_control = InteractiveMarkerControl()
         base_control.orientation_mode = InteractiveMarkerControl.FIXED
