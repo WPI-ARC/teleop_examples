@@ -27,7 +27,8 @@ from transformation_helper import *
 
 class HuboMarkerTeleop:
 
-    def __init__(self, marker_namespace, left_end_effector_mesh, right_end_effector_mesh, arm_action_prefix, gripper_action_prefix, controller_topic, trans_damping, rot_damping):
+    def __init__(self, marker_namespace, left_end_effector_mesh, right_end_effector_mesh, arm_action_prefix, gripper_action_prefix, controller_topic, trans_damping, rot_damping, enable_exec):
+        self.enable_exec = enable_exec
         self.marker_namespace = marker_namespace
         self.left_end_effector_mesh = left_end_effector_mesh
         self.right_end_effector_mesh = right_end_effector_mesh
@@ -56,8 +57,8 @@ class HuboMarkerTeleop:
         rospy.loginfo("Getting start poses of the end effectors...")
         self.listener = tf.TransformListener()
         self.base_frame = "/Body_Torso"
-        t1 = self.tf.getLatestCommonTime(self.base_frame, "/Body_LWR")
-        t2 = self.tf.getLatestCommonTime(self.base_frame, "/Body_RWR")
+        t1 = self.listener.getLatestCommonTime(self.base_frame, "/Body_LWR")
+        t2 = self.listener.getLatestCommonTime(self.base_frame, "/Body_RWR")
         [ltrans,lrot] = self.listener.lookupTransform(self.base_frame, "/Body_LWR", t1)
         [rtrans,rrot] = self.listener.lookupTransform(self.base_frame, "/Body_RWR", t2)
         start_left_pose = PoseFromTransform(TransformFromComponents(ltrans, lrot))
@@ -71,17 +72,20 @@ class HuboMarkerTeleop:
         self.right_arm_pose.pose = start_right_pose
         rospy.loginfo("...Set start end effector poses")
         # Set up the control clients for arms and grippers
-        rospy.loginfo("Setting up action clients...")
-        self.left_arm_client = actionlib.SimpleActionClient(arm_action_prefix + "/left_arm/end_effector_pose_action", EndEffectorPoseAction)
-        self.left_arm_client.wait_for_server()
-        self.right_arm_client = actionlib.SimpleActionClient(arm_action_prefix + "/right_arm/end_effector_pose_action", EndEffectorPoseAction)
-        self.right_arm_client.wait_for_server()
-        rospy.loginfo("Arm clients loaded")
-        self.left_gripper_client = actionlib.SimpleActionClient(gripper_action_prefix + "/left_gripper/gripper_action", HuboGripperCommandAction)
-        self.left_gripper_client.wait_for_server()
-        self.right_gripper_client = actionlib.SimpleActionClient(gripper_action_prefix + "/right_arm/gripper_action", HuboGripperCommandAction)
-        self.right_gripper_client.wait_for_server()
-        rospy.loginfo("Gripper clients loaded")
+        if (self.enable_exec):
+            rospy.loginfo("Execution enabled - Setting up action clients...")
+            self.left_arm_client = actionlib.SimpleActionClient(arm_action_prefix + "/left_arm/end_effector_pose_action", EndEffectorPoseAction)
+            self.left_arm_client.wait_for_server()
+            self.right_arm_client = actionlib.SimpleActionClient(arm_action_prefix + "/right_arm/end_effector_pose_action", EndEffectorPoseAction)
+            self.right_arm_client.wait_for_server()
+            rospy.loginfo("Arm clients loaded")
+            self.left_gripper_client = actionlib.SimpleActionClient(gripper_action_prefix + "/left_gripper/gripper_action", HuboGripperCommandAction)
+            self.left_gripper_client.wait_for_server()
+            self.right_gripper_client = actionlib.SimpleActionClient(gripper_action_prefix + "/right_arm/gripper_action", HuboGripperCommandAction)
+            self.right_gripper_client.wait_for_server()
+            rospy.loginfo("Gripper clients loaded")
+        else:
+            rospy.logwarn("Execution disabled")
         # Setup the interactive marker server
         self.server = InteractiveMarkerServer(self.marker_namespace)
         # Subscribe to the spacenav
@@ -277,18 +281,27 @@ class HuboMarkerTeleop:
                 close_goal = HuboGripperCommandGoal()
                 close_goal.FingerPosition = 0.0
                 close_goal.FingerEffort = -1.0
-                self.l_gripper_client.send_goal(close_goal)
+                if (self.enable_exec):
+                    self.l_gripper_client.send_goal(close_goal)
+                else:
+                    rospy.logwarn("Execution is disabled, so hand will not close!")
                 rospy.loginfo("Closing left hand")
             elif (self.gripper_options[feedback.menu_entry_id - 1] == "OPEN"):
                 open_goal = HuboGripperCommandGoal()
                 open_goal.FingerPosition = 1.0
                 open_goal.FingerEffort = -1.0
-                self.l_gripper_client.send_goal(open_goal)
+                if (self.enable_exec):
+                    self.l_gripper_client.send_goal(open_goal)
+                else:
+                    rospy.logwarn("Execution is disabled, so hand will not open!")
                 rospy.loginfo("Opening left hand")
             elif (self.gripper_options[feedback.menu_entry_id - 1] == "EXEC"):
                 arm_goal = EndEffectorPoseGoal()
                 arm_goal.EndEffectorPose = self.left_arm_pose
-                self.l_arm_client.send_goal(arm_goal)
+                if (self.enable_exec):
+                    self.l_arm_client.send_goal(arm_goal)
+                else:
+                    rospy.logwarn("Execution is disabled, so arm will not move!")
                 rospy.loginfo("Executing left arm")
             else:
                 rospy.logerr("Unrecognized menu option")
@@ -308,30 +321,45 @@ class HuboMarkerTeleop:
                 close_goal = HuboGripperCommandGoal()
                 close_goal.FingerPosition = 0.0
                 close_goal.FingerEffort = -1.0
-                self.r_gripper_client.send_goal(close_goal)
+                if (self.enable_exec):
+                    self.r_gripper_client.send_goal(close_goal)
+                else:
+                    rospy.logwarn("Execution is disabled, so hand will not close!")
                 rospy.loginfo("Closing right hand")
             elif (self.gripper_options[feedback.menu_entry_id - 1] == "OPEN"):
                 open_goal = HuboGripperCommandGoal()
                 open_goal.FingerPosition = 1.0
                 open_goal.FingerEffort = -1.0
-                self.r_gripper_client.send_goal(open_goal)
+                if (self.enable_exec):
+                    self.r_gripper_client.send_goal(open_goal)
+                else:
+                    rospy.logwarn("Execution is disabled, so hand will not open!")
                 rospy.loginfo("Opening right hand")
             elif (self.gripper_options[feedback.menu_entry_id - 1] == "CLOSE TRIGGER"):
                 close_goal = HuboGripperCommandGoal()
                 close_goal.TriggerPosition = 0.0
                 close_goal.TriggerEffort = -1.0
-                self.r_gripper_client.send_goal(close_goal)
-                rospy.loginfo("Closing right hand")
+                if (self.enable_exec):
+                    self.r_gripper_client.send_goal(close_goal)
+                else:
+                    rospy.logwarn("Execution is disabled, so trigger will not close!")
+                rospy.loginfo("Closing right trigger")
             elif (self.gripper_options[feedback.menu_entry_id - 1] == "OPEN TRIGGER"):
                 open_goal = HuboGripperCommandGoal()
                 open_goal.TriggerPosition = 1.0
                 open_goal.TriggerEffort = -1.0
-                self.r_gripper_client.send_goal(open_goal)
-                rospy.loginfo("Opening right hand")
+                if (self.enable_exec):
+                    self.r_gripper_client.send_goal(open_goal)
+                else:
+                    rospy.logwarn("Execution is disabled, so trigger will not open!")
+                rospy.loginfo("Opening right trigger")
             elif (self.gripper_options[feedback.menu_entry_id - 1] == "EXEC"):
                 arm_goal = EndEffectorPoseGoal()
                 arm_goal.EndEffectorPose = self.right_arm_pose
-                self.r_arm_client.send_goal(arm_goal)
+                if (self.enable_exec):
+                    self.r_arm_client.send_goal(arm_goal)
+                else:
+                    rospy.logwarn("Execution is disabled, so arm will not move!")
                 rospy.loginfo("Executing right arm")
             else:
                 rospy.logerr("Unrecognized menu option")
@@ -493,4 +521,5 @@ if __name__ == '__main__':
     controller_topic = "spacenav/joy"
     trans_damping = 0.002
     rot_damping = 0.005
-    HuboMarkerTeleop(marker_namespace, left_end_effector_mesh, right_end_effector_mesh, arm_action_prefix, gripper_action_prefix, controller_topic, trans_damping, rot_damping)
+    enable_exec = rospy.get_param("~enable_exec", False)
+    HuboMarkerTeleop(marker_namespace, left_end_effector_mesh, right_end_effector_mesh, arm_action_prefix, gripper_action_prefix, controller_topic, trans_damping, rot_damping, enable_exec)
