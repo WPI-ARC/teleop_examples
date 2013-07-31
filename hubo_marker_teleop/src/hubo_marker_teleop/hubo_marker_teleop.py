@@ -29,6 +29,7 @@ class HuboMarkerTeleop:
 
     def __init__(self, marker_namespace, left_end_effector_mesh, right_end_effector_mesh, arm_action_prefix, gripper_action_prefix, controller_topic, trans_damping, rot_damping, enable_exec):
         self.enable_exec = enable_exec
+        self.listener = tf.TransformListener()
         self.marker_namespace = marker_namespace
         self.left_end_effector_mesh = left_end_effector_mesh
         self.right_end_effector_mesh = right_end_effector_mesh
@@ -55,12 +56,10 @@ class HuboMarkerTeleop:
             i += 1
         # Compute the start poses
         rospy.loginfo("Getting start poses of the end effectors...")
-        self.listener = tf.TransformListener()
+        rospy.sleep(0.5)
         self.base_frame = "/Body_Torso"
-        t1 = self.listener.getLatestCommonTime(self.base_frame, "/Body_LWR")
-        t2 = self.listener.getLatestCommonTime(self.base_frame, "/Body_RWR")
-        [ltrans,lrot] = self.listener.lookupTransform(self.base_frame, "/Body_LWR", t1)
-        [rtrans,rrot] = self.listener.lookupTransform(self.base_frame, "/Body_RWR", t2)
+        [ltrans,lrot] = self.listener.lookupTransform(self.base_frame, "/Body_LWR", rospy.Time())
+        [rtrans,rrot] = self.listener.lookupTransform(self.base_frame, "/Body_RWR", rospy.Time())
         start_left_pose = PoseFromTransform(TransformFromComponents(ltrans, lrot))
         start_right_pose = PoseFromTransform(TransformFromComponents(rtrans, rrot))
         # Set the default poses
@@ -100,13 +99,15 @@ class HuboMarkerTeleop:
             self.calibrated_vals = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
             rospy.loginfo("Enabling Spacenav input")
             self.spacenav_sub = rospy.Subscriber(controller_topic, Joy, self.spacenav_cb)
-        # Calibrate the spacenav
-        rospy.loginfo("Calibrating Spacenav - DO NOT TOUCH THE SPACENAV DURING CALIBRATION!")
-        rate = rospy.Rate(20.0)
-        while not self.calibrated:
-            rate.sleep()
-        rospy.loginfo("Spacenav calibrated")
+            # Calibrate the spacenav
+            rospy.loginfo("Calibrating Spacenav - DO NOT TOUCH THE SPACENAV DURING CALIBRATION!")
+            rate = rospy.Rate(20.0)
+            while not self.calibrated and not rospy.is_shutdown():
+                rate.sleep()
+            rospy.loginfo("Spacenav calibrated")
+        rospy.loginfo("HuboMarkerTeleop loaded")
         # Spin forever
+        rate = rospy.Rate(20.0)
         while not rospy.is_shutdown():
             self.update()
             rate.sleep()
@@ -513,13 +514,13 @@ class HuboMarkerTeleop:
 
 if __name__ == '__main__':
     rospy.init_node('hubo_marker_teleop')
-    marker_namespace = "hubo_marker_teleop"
-    left_end_effector_mesh = "package://drchubo-v2/meshes/convhull_LWR_merged.stl"
-    right_end_effector_mesh = "package://drchubo-v2/meshes/convhull_RWR_merged.stl"
-    arm_action_prefix = "drchubo_fullbody_interface/"
-    gripper_action_prefix = "drchubo_fullbody_interface/"
-    controller_topic = "spacenav/joy"
-    trans_damping = 0.002
-    rot_damping = 0.005
+    marker_namespace = rospy.get_param("~marker_namespace", "hubo_marker_teleop")
+    left_end_effector_mesh = rospy.get_param("~left_end_effector_mesh", "package://drchubo-v3/meshes/convhull_LWR_merged.stl")
+    right_end_effector_mesh = rospy.get_param("~right_end_effector_mesh", "package://drchubo-v3/meshes/convhull_RWR_merged.stl")
+    arm_action_prefix = rospy.get_param("~arm_action_prefix" , "drchubo_fullbody_interface/")
+    gripper_action_prefix = rospy.get_param("~gripper_action_prefix" , "drchubo_fullbody_interface/")
+    controller_topic = rospy.get_param("~spacenav_topic", "")
+    trans_damping = rospy.get_param("~trans_damping", 0.002)
+    rot_damping = rospy.get_param("~rot_damping", 0.005)
     enable_exec = rospy.get_param("~enable_exec", False)
     HuboMarkerTeleop(marker_namespace, left_end_effector_mesh, right_end_effector_mesh, arm_action_prefix, gripper_action_prefix, controller_topic, trans_damping, rot_damping, enable_exec)
