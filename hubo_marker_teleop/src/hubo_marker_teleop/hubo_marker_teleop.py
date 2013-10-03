@@ -112,6 +112,7 @@ class HuboMarkerTeleop:
             self.update()
             rate.sleep()
 
+    # This function is only used when using a spacenav controller
     def attempt_calibration(self, new_axes):
         if (len(self.calibration_data) >= 50):
             elements = float(len(self.calibration_data))
@@ -140,6 +141,7 @@ class HuboMarkerTeleop:
         else:
             self.calibration_data.append(new_axes)
 
+    # This function is only used when using a spacenav controller
     def spacenav_cb(self, msg):
         if not self.calibrated:
             self.attempt_calibration(msg.axes)
@@ -155,6 +157,7 @@ class HuboMarkerTeleop:
         elif (self.controller_mode == "RIGHT"):
             self.right_arm_pose.pose = self.update_from_spacenav(principle_axis_value, principle_axis_num, self.right_arm_pose.pose, "RIGHT")
 
+    # This function is only used when using a spacenav controller
     def mode_switch(self, buttons, current_mode):
         rising_edge = [False, False]
         if (self.last_buttons[0] == 0 and buttons[0] == 1):
@@ -203,6 +206,7 @@ class HuboMarkerTeleop:
             rospy.loginfo("Switching to new mode: " + new_mode)
         return new_mode
 
+    # This function is only used when using a spacenav controller
     def clean_spacenav(self, axes):
         max_val = 0.0
         max_index = 0
@@ -212,6 +216,7 @@ class HuboMarkerTeleop:
                 max_index = index
         return [max_val, max_index]
 
+    # This function is only used when using a spacenav controller
     def update_from_spacenav(self, control_axis_value, control_axis_num, pose_to_update, arm):
         current_orientation = [pose_to_update.orientation.x, pose_to_update.orientation.y, pose_to_update.orientation.z, pose_to_update.orientation.w]
         # Filter out drift
@@ -278,7 +283,7 @@ class HuboMarkerTeleop:
         elif (event_type == feedback.POSE_UPDATE):
             self.left_arm_pose.pose = self.clip_to_arm_bounds(feedback.pose, 'LEFT')
         elif (event_type == feedback.MENU_SELECT):
-            if (self.gripper_options[feedback.menu_entry_id - 1] == "CLOSE"):
+            if (self.left_gripper_options[feedback.menu_entry_id - 1] == "CLOSE"):
                 close_goal = HuboGripperCommandGoal()
                 close_goal.FingerPosition = 0.0
                 close_goal.FingerEffort = -1.0
@@ -287,7 +292,7 @@ class HuboMarkerTeleop:
                 else:
                     rospy.logwarn("Execution is disabled, so hand will not close!")
                 rospy.loginfo("Closing left hand")
-            elif (self.gripper_options[feedback.menu_entry_id - 1] == "OPEN"):
+            elif (self.left_gripper_options[feedback.menu_entry_id - 1] == "OPEN"):
                 open_goal = HuboGripperCommandGoal()
                 open_goal.FingerPosition = 1.0
                 open_goal.FingerEffort = -1.0
@@ -296,7 +301,7 @@ class HuboMarkerTeleop:
                 else:
                     rospy.logwarn("Execution is disabled, so hand will not open!")
                 rospy.loginfo("Opening left hand")
-            elif (self.gripper_options[feedback.menu_entry_id - 1] == "EXEC"):
+            elif (self.left_gripper_options[feedback.menu_entry_id - 1] == "EXEC"):
                 arm_goal = EndEffectorPoseGoal()
                 arm_goal.EndEffectorPose = self.left_arm_pose
                 if (self.enable_exec):
@@ -318,7 +323,7 @@ class HuboMarkerTeleop:
         elif (event_type == feedback.POSE_UPDATE):
             self.right_arm_pose.pose = self.clip_to_arm_bounds(feedback.pose, 'RIGHT')
         elif (event_type == feedback.MENU_SELECT):
-            if (self.gripper_options[feedback.menu_entry_id - 1] == "CLOSE"):
+            if (self.right_gripper_options[feedback.menu_entry_id - 1] == "CLOSE"):
                 close_goal = HuboGripperCommandGoal()
                 close_goal.FingerPosition = 0.0
                 close_goal.FingerEffort = -1.0
@@ -327,7 +332,7 @@ class HuboMarkerTeleop:
                 else:
                     rospy.logwarn("Execution is disabled, so hand will not close!")
                 rospy.loginfo("Closing right hand")
-            elif (self.gripper_options[feedback.menu_entry_id - 1] == "OPEN"):
+            elif (self.right_gripper_options[feedback.menu_entry_id - 1] == "OPEN"):
                 open_goal = HuboGripperCommandGoal()
                 open_goal.FingerPosition = 1.0
                 open_goal.FingerEffort = -1.0
@@ -336,7 +341,7 @@ class HuboMarkerTeleop:
                 else:
                     rospy.logwarn("Execution is disabled, so hand will not open!")
                 rospy.loginfo("Opening right hand")
-            elif (self.gripper_options[feedback.menu_entry_id - 1] == "CLOSE TRIGGER"):
+            elif (self.right_gripper_options[feedback.menu_entry_id - 1] == "CLOSE TRIGGER"):
                 close_goal = HuboGripperCommandGoal()
                 close_goal.TriggerPosition = 0.0
                 close_goal.TriggerEffort = -1.0
@@ -345,7 +350,7 @@ class HuboMarkerTeleop:
                 else:
                     rospy.logwarn("Execution is disabled, so trigger will not close!")
                 rospy.loginfo("Closing right trigger")
-            elif (self.gripper_options[feedback.menu_entry_id - 1] == "OPEN TRIGGER"):
+            elif (self.right_gripper_options[feedback.menu_entry_id - 1] == "OPEN TRIGGER"):
                 open_goal = HuboGripperCommandGoal()
                 open_goal.TriggerPosition = 1.0
                 open_goal.TriggerEffort = -1.0
@@ -354,7 +359,7 @@ class HuboMarkerTeleop:
                 else:
                     rospy.logwarn("Execution is disabled, so trigger will not open!")
                 rospy.loginfo("Opening right trigger")
-            elif (self.gripper_options[feedback.menu_entry_id - 1] == "EXEC"):
+            elif (self.right_gripper_options[feedback.menu_entry_id - 1] == "EXEC"):
                 arm_goal = EndEffectorPoseGoal()
                 arm_goal.EndEffectorPose = self.right_arm_pose
                 if (self.enable_exec):
@@ -369,7 +374,7 @@ class HuboMarkerTeleop:
 
     def clip_to_arm_bounds(self, arm_target, arm_code):
         max_up = 0.5
-        max_down = -0.5
+        max_down = -0.7
         max_left = 0.50
         max_right = -0.50
         max_backward = -0.5
@@ -398,13 +403,14 @@ class HuboMarkerTeleop:
         new_marker.pose = marker_pose.pose
         new_marker.scale = 0.25
         new_marker.name = marker_name
-        # Make the default control for the marker itself
+        # Make the default control for the marker itself (this includes the visual display marker)
         base_control = InteractiveMarkerControl()
         base_control.orientation_mode = InteractiveMarkerControl.FIXED
         base_control.always_visible = True
         display_marker = self.make_arm_marker(marker_pose, marker_name)
         base_control.markers.append(display_marker)
         new_marker.controls.append(base_control)
+        # Make the marker menu control (this includes the visual display marker)
         new_control = InteractiveMarkerControl()
         new_control.interaction_mode = InteractiveMarkerControl.MENU
         new_control.always_visible = True
@@ -515,8 +521,8 @@ class HuboMarkerTeleop:
 if __name__ == '__main__':
     rospy.init_node('hubo_marker_teleop')
     marker_namespace = rospy.get_param("~marker_namespace", "hubo_marker_teleop")
-    left_end_effector_mesh = rospy.get_param("~left_end_effector_mesh", "package://drchubo-v3/meshes/convhull_LWR_merged.stl")
-    right_end_effector_mesh = rospy.get_param("~right_end_effector_mesh", "package://drchubo-v3/meshes/convhull_RWR_merged.stl")
+    left_end_effector_mesh = rospy.get_param("~left_end_effector_mesh", "package://drchubo_v3/meshes/convhull_LWR_merged.stl")
+    right_end_effector_mesh = rospy.get_param("~right_end_effector_mesh", "package://drchubo_v3/meshes/convhull_RWR_merged.stl")
     arm_action_prefix = rospy.get_param("~arm_action_prefix" , "drchubo_fullbody_interface/")
     gripper_action_prefix = rospy.get_param("~gripper_action_prefix" , "drchubo_fullbody_interface/")
     controller_topic = rospy.get_param("~spacenav_topic", "")
