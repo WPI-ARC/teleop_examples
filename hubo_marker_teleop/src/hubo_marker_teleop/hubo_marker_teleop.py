@@ -45,7 +45,7 @@ class HuboMarkerTeleop:
         self.active_joints = active_joints
         self.joint_lock = threading.Lock()
         self.latest_joint_state = None
-        self.execution_scaling_time = 5.0
+        self.execution_scaling_time = 2.0
         self.left_arm_joint_targets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.right_arm_joint_targets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.left_gripper_joint_targets = [0.0, 0.0]
