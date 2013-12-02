@@ -45,7 +45,7 @@ class HuboMarkerTeleop:
         self.active_joints = active_joints
         self.joint_lock = threading.Lock()
         self.latest_joint_state = None
-        self.execution_scaling_time = 1.0
+        self.execution_scaling_time = 5.0
         self.left_arm_joint_targets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.right_arm_joint_targets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.left_gripper_joint_targets = [0.0, 0.0]
@@ -112,13 +112,27 @@ class HuboMarkerTeleop:
         self.right_peg_ikfast.load()
         # Get the torso link (in OpenRAVE)
         self.torso_link = None
+        self.left_wrist_link = None
+        self.right_wrist_link = None
         links = self.robot.GetLinks()
         for link in links:
             if (link.GetName() == "Body_Torso"):
                 self.torso_link = link
+            if (link.GetName() == "Body_LWR"):
+                self.left_wrist_link = link
+            if (link.GetName() == "Body_RWR"):
+                self.right_wrist_link = link
         if (self.torso_link == None):
             rospy.logfatal("Could not find torso link in OpenRAVE")
             rospy.signal_shutdown("Could not find torso link in OpenRAVE")
+            exit()
+        if (self.left_wrist_link == None):
+            rospy.logfatal("Could not find left wrist link in OpenRAVE")
+            rospy.signal_shutdown("Could not find left wrist link in OpenRAVE")
+            exit()
+        if (self.right_wrist_link == None):
+            rospy.logfatal("Could not find right wrist link in OpenRAVE")
+            rospy.signal_shutdown("Could not find right wrist link in OpenRAVE")
             exit()
         # Set the offset pose between gripper and peg
         self.left_peg_offset = Pose()
@@ -321,6 +335,38 @@ class HuboMarkerTeleop:
                 if (self.robot.CheckSelfCollision()):
                     rospy.logerr("Encountered self-collision - cutting trajectory short at the last safe state!")
                     trajectory.points = trajectory.points[:index]
+                    # Set the robot in the last safe configuration
+                    safe_point = trajectory.points[-1]
+                    positions = point.positions
+                    left_arm = self.extract_left_arm(trajectory.joint_names, positions)
+                    right_arm = self.extract_right_arm(trajectory.joint_names, positions)
+                    # Set LEFT arm
+                    self.robot.SetDOFValues(left_arm, self.robot.GetManipulators()[0].GetArmIndices())
+                    # Set RIGHT arm
+                    self.robot.SetDOFValues(right_arm, self.robot.GetManipulators()[1].GetArmIndices())
+                    # Get the transforms for each end effector
+                    Ttorso = self.torso_link.GetTransform()
+                    Tleftwrist = self.left_wrist_link.GetTransform()
+                    Trightwrist = self.right_wrist_link.GetTransform()
+                    Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
+                    Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
+                    left_wrist_pose = PoseFromMatrix(Ttorso_left_wrist)
+                    right_wrist_pose = PoseFromMatrix(Ttorso_right_wrist)
+                    # Convert the orientation of the OpenRAVE pose to ROS
+                    left_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
+                    left_rotation = [0.0,0.0,0.0,0.0]
+                    left_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], left_rotation))
+                    right_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
+                    right_rotation = [0.0,0.0,0.0,0.0]
+                    right_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], right_rotation))
+                    real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
+                    real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
+                    # Update the stored poses to the safe ones
+                    self.left_arm_pose.pose = real_left_wrist_pose
+                    self.left_arm_joint_targets = left_arm
+                    self.right_arm_pose.pose = real_right_wrist_pose
+                    self.right_arm_joint_targets = right_arm
+                    rospy.loginfo("Set markers to last safe state")
                     break
                 # Wait for OpenRAVE to catch up
                 self.robot.WaitForController(0)
@@ -454,7 +500,7 @@ class HuboMarkerTeleop:
             rospy.logwarn("No RF2 joint")
         return target_state
 
-    def get_finger_indices(current_names):
+    def get_finger_indices(self, current_names):
         finger_indices = []
         for index in range(len(current_names)):
             if ("F" in current_names[index] or "f" in current_names[index]):
@@ -534,7 +580,7 @@ class HuboMarkerTeleop:
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
         rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
-        adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], rotation))
+        adjustment = PoseFromTransform(TransformFromComponents([0.1,0.0,0.0], rotation))
         real_target_pose = ComposePoses(target_pose, adjustment)
         # Convert the ROS pose to an OpenRAVE transform
         Ttorso = self.torso_link.GetTransform()
@@ -549,7 +595,7 @@ class HuboMarkerTeleop:
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
         rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
-        adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], rotation))
+        adjustment = PoseFromTransform(TransformFromComponents([0.1,0.0,0.0], rotation))
         real_target_pose = ComposePoses(target_pose, adjustment)
         # Convert the ROS pose to an OpenRAVE transform
         Ttorso = self.torso_link.GetTransform()
