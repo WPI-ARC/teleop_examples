@@ -28,6 +28,8 @@ from actionlib import *
 from transformation_helper import *
 from openravepy import *
 
+from hubo_marker_teleop import *
+
 class HuboMarkerTeleop:
 
     GRIPPER = 'GRIPPER'
@@ -45,7 +47,8 @@ class HuboMarkerTeleop:
         self.active_joints = active_joints
         self.joint_lock = threading.Lock()
         self.latest_joint_state = None
-        self.execution_scaling_time = 2.0
+        self.execution_scaling_time = 1.0
+        self.preview_scaling_factor = 0.25
         self.left_arm_joint_targets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.right_arm_joint_targets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.left_gripper_joint_targets = [0.0, 0.0]
@@ -56,6 +59,8 @@ class HuboMarkerTeleop:
         self.right_peg_options = ["EXEC","SWITCH TO GRIPPER"]
         self.left_mode = self.GRIPPER
         self.right_mode = self.GRIPPER
+        self.left_dragging = False
+        self.right_dragging = False
         self.left_gripper_handler = MenuHandler()
         self.right_gripper_handler = MenuHandler()
         self.left_peg_handler = MenuHandler()
@@ -112,19 +117,26 @@ class HuboMarkerTeleop:
         self.right_peg_ikfast.load()
         # Get the torso link (in OpenRAVE)
         self.torso_link = None
+        self.torso_yaw_link = None
         self.left_wrist_link = None
         self.right_wrist_link = None
         links = self.robot.GetLinks()
         for link in links:
             if (link.GetName() == "Body_Torso"):
                 self.torso_link = link
-            if (link.GetName() == "Body_LWR"):
+            elif (link.GetName() == "Body_TSY"):
+                self.torso_yaw_link = link
+            elif (link.GetName() == "Body_LWR"):
                 self.left_wrist_link = link
-            if (link.GetName() == "Body_RWR"):
+            elif (link.GetName() == "Body_RWR"):
                 self.right_wrist_link = link
         if (self.torso_link == None):
             rospy.logfatal("Could not find torso link in OpenRAVE")
             rospy.signal_shutdown("Could not find torso link in OpenRAVE")
+            exit()
+        if (self.torso_yaw_link == None):
+            rospy.logfatal("Could not find torso yaw link in OpenRAVE")
+            rospy.signal_shutdown("Could not find torso yaw link in OpenRAVE")
             exit()
         if (self.left_wrist_link == None):
             rospy.logfatal("Could not find left wrist link in OpenRAVE")
@@ -134,6 +146,30 @@ class HuboMarkerTeleop:
             rospy.logfatal("Could not find right wrist link in OpenRAVE")
             rospy.signal_shutdown("Could not find right wrist link in OpenRAVE")
             exit()
+        # Add padding to the waist to be (slightly) safer
+        Tpadding = self.torso_yaw_link.GetTransform()
+        # Front
+        self.waist1 = RaveCreateKinBody(self.env,'')
+        self.waist1.SetName('waist1')
+        self.waist1.InitFromBoxes(numpy.array([[0.11,0,-0.05,0.005,0.18,.10]]), True) # False for not visible
+        self.waist1.GetLinks()[0].GetGeometries()[0].SetDiffuseColor(array((0.3,0.3,0.3)))
+        self.waist1.SetTransform(Tpadding)
+        # Left side
+        self.waist2 = RaveCreateKinBody(self.env,'')
+        self.waist2.SetName('waist2')
+        self.waist2.InitFromBoxes(numpy.array([[0,0.17,-0.05,0.11,0.005,.10]]), True) # False for not visible
+        self.waist2.GetLinks()[0].GetGeometries()[0].SetDiffuseColor(array((0.3,0.3,0.3)))
+        self.waist2.SetTransform(Tpadding)
+        # Right side
+        self.waist3 = RaveCreateKinBody(self.env,'')
+        self.waist3.SetName('waist3')
+        self.waist3.InitFromBoxes(numpy.array([[0,-0.17,-0.05,0.11,0.005,.10]]), True) # False for not visible
+        self.waist3.GetLinks()[0].GetGeometries()[0].SetDiffuseColor(array((0.3,0.3,0.3)))
+        self.waist3.SetTransform(Tpadding)
+        # Add to the environment
+        self.env.Add(self.waist1,True)
+        self.env.Add(self.waist2,True)
+        self.env.Add(self.waist3,True)
         # Set the offset pose between gripper and peg
         self.left_peg_offset = Pose()
         self.left_peg_offset.position.x = -0.027
@@ -208,8 +244,16 @@ class HuboMarkerTeleop:
         if (event_type == feedback.MOUSE_DOWN):
             pass
         elif (event_type == feedback.MOUSE_UP):
-            pass
+            if (self.left_dragging):
+                rospy.loginfo("Mouse UP - finding best IK solution")
+                best_ik_solution = self.compute_left_arm(self.left_arm_pose.pose, best=True)
+                if (best_ik_solution != None):
+                    self.left_arm_joint_targets = best_ik_solution
+                self.left_dragging = False
+            else:
+                pass
         elif (event_type == feedback.POSE_UPDATE):
+            self.left_dragging = True
             ik_solution = self.compute_left_arm(feedback.pose)
             if (ik_solution != None):
                 self.left_arm_pose.pose = feedback.pose
@@ -238,8 +282,16 @@ class HuboMarkerTeleop:
         if (event_type == feedback.MOUSE_DOWN):
             pass
         elif (event_type == feedback.MOUSE_UP):
-            pass
+            if (self.left_dragging):
+                rospy.loginfo("Mouse UP - finding best IK solution")
+                best_ik_solution = self.compute_left_peg(self.left_arm_pose.pose, best=True)
+                if (best_ik_solution != None):
+                    self.left_arm_joint_targets = best_ik_solution
+                self.left_dragging = False
+            else:
+                pass
         elif (event_type == feedback.POSE_UPDATE):
+            self.left_dragging = True
             ik_solution = self.compute_left_peg(feedback.pose)
             if (ik_solution != None):
                 self.left_arm_pose.pose = feedback.pose
@@ -260,8 +312,16 @@ class HuboMarkerTeleop:
         if (event_type == feedback.MOUSE_DOWN):
             pass
         elif (event_type == feedback.MOUSE_UP):
-            pass
+            if (self.right_dragging):
+                rospy.loginfo("Mouse UP - finding best IK solution")
+                best_ik_solution = self.compute_right_arm(self.right_arm_pose.pose, best=True)
+                if (best_ik_solution != None):
+                    self.right_arm_joint_targets = best_ik_solution
+                self.right_dragging = False
+            else:
+                pass
         elif (event_type == feedback.POSE_UPDATE):
+            self.right_dragging = True
             ik_solution = self.compute_right_arm(feedback.pose)
             if (ik_solution != None):
                 self.right_arm_pose.pose = feedback.pose
@@ -290,8 +350,16 @@ class HuboMarkerTeleop:
         if (event_type == feedback.MOUSE_DOWN):
             pass
         elif (event_type == feedback.MOUSE_UP):
-            pass
+            if (self.right_dragging):
+                rospy.loginfo("Mouse UP - finding best IK solution")
+                best_ik_solution = self.compute_right_peg(self.right_arm_pose.pose, best=True)
+                if (best_ik_solution != None):
+                    self.right_arm_joint_targets = best_ik_solution
+                self.right_dragging = False
+            else:
+                pass
         elif (event_type == feedback.POSE_UPDATE):
+            self.right_dragging = True
             ik_solution = self.compute_right_peg(feedback.pose)
             if (ik_solution != None):
                 self.right_arm_pose.pose = feedback.pose
@@ -333,8 +401,10 @@ class HuboMarkerTeleop:
                 self.robot.SetDOFValues(right_arm, self.robot.GetManipulators()[1].GetArmIndices())
                 # Check self-collision
                 if (self.robot.CheckSelfCollision()):
-                    rospy.logerr("Encountered self-collision - cutting trajectory short at the last safe state!")
-                    trajectory.points = trajectory.points[:index]
+                    #rospy.logerr("Encountered self-collision - cutting trajectory short at the last safe state!")
+                    #trajectory.points = trajectory.points[:index]
+                    rospy.logerr("Encountered self-collision - aborting trajectory!")
+                    trajectory.points = trajectory.points[:1]
                     # Set the robot in the last safe configuration
                     safe_point = trajectory.points[-1]
                     positions = point.positions
@@ -372,35 +442,119 @@ class HuboMarkerTeleop:
                 self.robot.WaitForController(0)
                 self.robot.GetController().Reset(0)
                 # Wait a bit
-                rospy.sleep(1.0 / 30.0)
+                rospy.sleep(self.preview_scaling_factor * (1.0 / 30.0))
         rospy.loginfo("Safe trajectory with " + str(len(trajectory.points)) + " states")
         exec_time = trajectory.points[-1].time_from_start.to_sec()
         rospy.loginfo("Execution time: " + str(exec_time) + " seconds")
+        # Ask the user to confirm execution
+        confirm_exec = True
+        confirm = raw_input("Confirm execution - Y/n: ")
+        # Check value
+        if (confirm.lower() == "n" or confirm.lower() == "no"):
+            confirm_exec = False
+        if (not confirm_exec):
+            rospy.logwarn("Aborting execution")
+            # Set the robot in the last safe configuration
+            safe_point = trajectory.points[0]
+            positions = safe_point.positions
+            left_arm = self.extract_left_arm(trajectory.joint_names, positions)
+            right_arm = self.extract_right_arm(trajectory.joint_names, positions)
+            # Set LEFT arm
+            self.robot.SetDOFValues(left_arm, self.robot.GetManipulators()[0].GetArmIndices())
+            # Set RIGHT arm
+            self.robot.SetDOFValues(right_arm, self.robot.GetManipulators()[1].GetArmIndices())
+            # Get the transforms for each end effector
+            Ttorso = self.torso_link.GetTransform()
+            Tleftwrist = self.left_wrist_link.GetTransform()
+            Trightwrist = self.right_wrist_link.GetTransform()
+            Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
+            Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
+            left_wrist_pose = PoseFromMatrix(Ttorso_left_wrist)
+            right_wrist_pose = PoseFromMatrix(Ttorso_right_wrist)
+            # Convert the orientation of the OpenRAVE pose to ROS
+            #left_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
+            left_rotation = [0.0,0.0,0.0,0.0]
+            left_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], left_rotation))
+            #right_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
+            right_rotation = [0.0,0.0,0.0,0.0]
+            right_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], right_rotation))
+            real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
+            real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
+            # Update the stored poses to the safe ones
+            self.left_arm_pose.pose = real_left_wrist_pose
+            self.left_arm_joint_targets = left_arm
+            self.right_arm_pose.pose = real_right_wrist_pose
+            self.right_arm_joint_targets = right_arm
+            rospy.loginfo("Reset markers to initial state")
+            return
         # Build the goal to execute
         if (self.enable_exec):
             trajectory_goal = JointTrajectoryGoal()
             trajectory_goal.trajectory = trajectory
             self.joint_traj_client.send_goal(trajectory_goal)
             if (wait):
-                self.joint_traj_client.wait_for_result()
+                self.joint_traj_client.wait_for_result(rospy.Duration(exec_time + 2.0))
+            rospy.loginfo("Execution complete")
         else:
             rospy.logwarn("Execution disabled")
 
     def stow_left(self):
         rospy.loginfo("Switching LEFT arm to PEG mode")
+        # Stow the wrist back to zero
         self.left_arm_joint_targets[6] = 0.0
         self.execute_robot(wait=True)
+        '''
+        # Point the peg outwards (flip the wrist back)
+        self.left_arm_joint_targets[5] = math.pi
+        # Set LEFT arm
+        self.robot.SetDOFValues(self.left_arm_joint_targets, self.robot.GetManipulators()[0].GetArmIndices())
+        # Get the transform for the left end effector
+        Ttorso = self.torso_link.GetTransform()
+        Tleftwrist = self.left_wrist_link.GetTransform()
+        Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
+        left_wrist_pose = PoseFromMatrix(Ttorso_left_wrist)
+        #left_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
+        left_rotation = [0.0,0.0,0.0,0.0]
+        left_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], left_rotation))
+        real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
+        self.left_arm_pose.pose = real_left_wrist_pose
+        self.execute_robot(wait=True)
+        '''
 
     def unstow_left(self):
         rospy.loginfo("Switching LEFT arm to GRIPPER mode")
+        # Point the peg inwards (flip the wrist back)
+        self.left_arm_joint_targets[5] = 0.0
+        self.execute_robot(wait=True)
 
     def stow_right(self):
         rospy.loginfo("Switching RIGHT arm to PEG mode")
+        # Stow the wrist back to zero
         self.right_arm_joint_targets[6] = 0.0
         self.execute_robot(wait=True)
+        '''
+        # Point the peg outwards (flip the wrist back)
+        self.right_arm_joint_targets[5] = math.pi
+        # Set RIGHT arm
+        self.robot.SetDOFValues(self.right_arm_joint_targets, self.robot.GetManipulators()[1].GetArmIndices())
+        # Get the transform for the right end effector
+        Ttorso = self.torso_link.GetTransform()
+        Trightwrist = self.right_wrist_link.GetTransform()
+        Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
+        right_wrist_pose = PoseFromMatrix(Ttorso_right_wrist)
+        #right_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
+        right_rotation = [0.0,0.0,0.0,0.0]
+        right_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], right_rotation))
+        real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
+        self.right_arm_pose.pose = real_right_wrist_pose
+        self.execute_robot(wait=True)
+        '''
 
     def unstow_right(self):
         rospy.loginfo("Switching RIGHT arm to GRIPPER mode")
+        # Point the peg inwards (flip the wrist back)
+        self.right_arm_joint_targets[5] = 0.0
+        self.execute_robot(wait=True)
 
     def execute_left_gripper(self, gripper_target=None, trigger_target=None):
         if (gripper_target != None):
@@ -567,15 +721,54 @@ class HuboMarkerTeleop:
         return new_traj
     '''
 
-    def euclidean_distance(self, state1, state2):
+    def euclidean_distance(self, state1, state2, dimensions=None):
         assert(len(state1) == len(state2))
-        total = 0.0
-        for index in range(len(state1)):
-            temp = (state1[index] - state2[index]) ** 2
-            total = total + temp
-        return math.sqrt(total)
+        if (dimensions == None):
+            total = 0.0
+            for index in range(len(state1)):
+                temp = (state1[index] - state2[index]) ** 2
+                total = total + temp
+            return math.sqrt(total)
+        else:
+            assert(dimensions <= len(state1))
+            total = 0.0
+            for index in range(dimensions):
+                temp = (state1[index] - state2[index]) ** 2
+                total = total + temp
+            return math.sqrt(total)
 
-    def compute_left_arm(self, target_pose):
+    def get_closest_solution(self, current_config, solutions, dimensions=None):
+        print "Trying to find the closest of " + str(len(solutions)) + " IKfast solutions"
+        # Compute the distance for each IK solution
+        solution_dists = []
+        for solution in solutions:
+            dist = self.euclidean_distance(current_config, solution, dimensions)
+            solution_dists.append([solution, dist])
+        # Pick the closest IK solution
+        closest = None
+        min_distance = float('inf')
+        for [solution, dist] in solution_dists:
+            if (dist < min_distance):
+                min_distance = dist
+                closest = solution
+        rospy.loginfo("Picked the closest IKfast solution with a distance of " + str(min_distance))
+        return closest
+
+    def get_left_arm_state(self):
+        current_joint_state = None
+        with self.joint_lock:
+            current_joint_state = deepcopy(self.latest_joint_state)
+        left_arm = self.extract_left_arm(current_joint_state.name, current_joint_state.position)
+        return left_arm
+
+    def get_right_arm_state(self):
+        current_joint_state = None
+        with self.joint_lock:
+            current_joint_state = deepcopy(self.latest_joint_state)
+        right_arm = self.extract_right_arm(current_joint_state.name, current_joint_state.position)
+        return right_arm
+
+    def compute_left_arm(self, target_pose, best=False):
         #print "Attempting to compute an IKfast solution for the left arm"
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
@@ -586,11 +779,15 @@ class HuboMarkerTeleop:
         Ttorso = self.torso_link.GetTransform()
         Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
         # Query IKFAST
-        ik_solution = self.left_arm_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+        if (best):
+            ik_solutions = self.left_arm_ikfast.manip.FindIKSolutions(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+            ik_solution = self.get_closest_solution(self.get_left_arm_state(), ik_solutions)
+        else:
+            ik_solution = self.left_arm_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
         #print "IK solution for the left arm: " + str(ik_solution)
         return ik_solution
 
-    def compute_right_arm(self, target_pose):
+    def compute_right_arm(self, target_pose, best=False):
         #print "Attempting to compute an IKfast solution for the right arm"
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
@@ -601,11 +798,15 @@ class HuboMarkerTeleop:
         Ttorso = self.torso_link.GetTransform()
         Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
         # Query IKFAST
-        ik_solution = self.right_arm_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+        if (best):
+            ik_solutions = self.right_arm_ikfast.manip.FindIKSolutions(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+            ik_solution = self.get_closest_solution(self.get_right_arm_state(), ik_solutions)
+        else:
+            ik_solution = self.right_arm_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
         #print "IK solution for the right arm: " + str(ik_solution)
         return ik_solution
 
-    def compute_left_peg(self, target_pose):
+    def compute_left_peg(self, target_pose, best=False):
         #print "Attempting to compute an IKfast solution for the left arm"
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
@@ -616,11 +817,17 @@ class HuboMarkerTeleop:
         Ttorso = self.torso_link.GetTransform()
         Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
         # Query IKFAST
-        ik_solution = self.left_peg_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+        if (best):
+            ik_solutions = self.left_peg_ikfast.manip.FindIKSolutions(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+            ik_solution = self.get_closest_solution(self.get_left_arm_state(), ik_solutions, dimensions=6)
+        else:
+            ik_solution = self.left_peg_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+        # Zero the last joint in the IK solution (since it doesn't actually exist)
+        ik_solution[6] = 0.0
         #print "IK solution for the left arm: " + str(ik_solution)
         return ik_solution
 
-    def compute_right_peg(self, target_pose):
+    def compute_right_peg(self, target_pose, best=False):
         #print "Attempting to compute an IKfast solution for the right arm"
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
@@ -631,7 +838,13 @@ class HuboMarkerTeleop:
         Ttorso = self.torso_link.GetTransform()
         Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
         # Query IKFAST
-        ik_solution = self.right_peg_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+        if (best):
+            ik_solutions = self.right_peg_ikfast.manip.FindIKSolutions(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+            ik_solution = self.get_closest_solution(self.get_right_arm_state(), ik_solutions, dimensions=6)
+        else:
+            ik_solution = self.right_peg_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
+        # Zero the last joint in the IK solution (since it doesn't actually exist)
+        ik_solution[6] = 0.0
         #print "IK solution for the right arm: " + str(ik_solution)
         return ik_solution
 
