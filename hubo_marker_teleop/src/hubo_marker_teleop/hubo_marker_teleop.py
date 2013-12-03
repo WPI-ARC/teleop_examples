@@ -407,7 +407,7 @@ class HuboMarkerTeleop:
                     trajectory.points = trajectory.points[:1]
                     # Set the robot in the last safe configuration
                     safe_point = trajectory.points[-1]
-                    positions = point.positions
+                    positions = safe_point.positions
                     left_arm = self.extract_left_arm(trajectory.joint_names, positions)
                     right_arm = self.extract_right_arm(trajectory.joint_names, positions)
                     # Set LEFT arm
@@ -436,6 +436,9 @@ class HuboMarkerTeleop:
                     self.left_arm_joint_targets = left_arm
                     self.right_arm_pose.pose = real_right_wrist_pose
                     self.right_arm_joint_targets = right_arm
+                    # Wait for OpenRAVE to catch up
+                    self.robot.WaitForController(0)
+                    self.robot.GetController().Reset(0)
                     rospy.loginfo("Set markers to last safe state")
                     break
                 # Wait for OpenRAVE to catch up
@@ -485,6 +488,9 @@ class HuboMarkerTeleop:
             self.left_arm_joint_targets = left_arm
             self.right_arm_pose.pose = real_right_wrist_pose
             self.right_arm_joint_targets = right_arm
+            # Wait for OpenRAVE to catch up
+            self.robot.WaitForController(0)
+            self.robot.GetController().Reset(0)
             rospy.loginfo("Reset markers to initial state")
             return
         # Build the goal to execute
@@ -501,7 +507,7 @@ class HuboMarkerTeleop:
     def stow_left(self):
         rospy.loginfo("Switching LEFT arm to PEG mode")
         # Stow the wrist back to zero
-        self.left_arm_joint_targets[6] = 0.0
+        self.left_arm_joint_targets[6] = -math.pi / 2.0
         self.execute_robot(wait=True)
         # Close the fingers & trigger
         self.execute_left_gripper(gripper_target="CLOSE", trigger_target="CLOSE")
@@ -546,7 +552,7 @@ class HuboMarkerTeleop:
     def stow_right(self):
         rospy.loginfo("Switching RIGHT arm to PEG mode")
         # Stow the wrist back to zero
-        self.right_arm_joint_targets[6] = 0.0
+        self.right_arm_joint_targets[6] = math.pi / 2.0
         self.execute_robot(wait=True)
         # Close the fingers & trigger
         self.execute_right_gripper(gripper_target="CLOSE", trigger_target="CLOSE")
@@ -656,7 +662,7 @@ class HuboMarkerTeleop:
         if (self.left_mode == self.GRIPPER):
             target_state[current_joints.name.index("LWR")] = left_arm_targets[6]
         else:
-            target_state[current_joints.name.index("LWR")] = 0.0
+            target_state[current_joints.name.index("LWR")] = -math.pi / 2.0
         target_state[current_joints.name.index("RSP")] = right_arm_targets[0]
         target_state[current_joints.name.index("RSR")] = right_arm_targets[1]
         target_state[current_joints.name.index("RSY")] = right_arm_targets[2]
@@ -666,7 +672,7 @@ class HuboMarkerTeleop:
         if (self.right_mode == self.GRIPPER):
             target_state[current_joints.name.index("RWR")] = right_arm_targets[6]
         else:
-            target_state[current_joints.name.index("RWR")] = 0.0
+            target_state[current_joints.name.index("RWR")] = math.pi / 2.0
         # Replace gripper values
         try:
             target_state[current_joints.name.index("LF1")] = left_gripper_targets[0]
@@ -856,7 +862,7 @@ class HuboMarkerTeleop:
             ik_solution = self.left_peg_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
         # Zero the last joint in the IK solution (since it doesn't actually exist)
         try:
-            ik_solution[6] = 0.0
+            ik_solution[6] = -math.pi / 2.0
         except:
             pass
         #print "IK solution for the left arm: " + str(ik_solution)
@@ -880,7 +886,7 @@ class HuboMarkerTeleop:
             ik_solution = self.right_peg_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
         # Zero the last joint in the IK solution (since it doesn't actually exist)
         try:
-            ik_solution[6] = 0.0
+            ik_solution[6] = math.pi / 2.0
         except:
             pass
         #print "IK solution for the right arm: " + str(ik_solution)
