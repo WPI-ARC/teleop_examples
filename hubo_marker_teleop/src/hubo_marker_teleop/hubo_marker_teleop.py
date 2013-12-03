@@ -503,9 +503,11 @@ class HuboMarkerTeleop:
         # Stow the wrist back to zero
         self.left_arm_joint_targets[6] = 0.0
         self.execute_robot(wait=True)
-        '''
+        # Close the fingers & trigger
+        self.execute_left_gripper(gripper_target="CLOSE", trigger_target="CLOSE")
+        #'''
         # Point the peg outwards (flip the wrist back)
-        self.left_arm_joint_targets[5] = math.pi
+        self.left_arm_joint_targets[5] = -math.pi
         # Set LEFT arm
         self.robot.SetDOFValues(self.left_arm_joint_targets, self.robot.GetManipulators()[0].GetArmIndices())
         # Get the transform for the left end effector
@@ -519,22 +521,38 @@ class HuboMarkerTeleop:
         real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
         self.left_arm_pose.pose = real_left_wrist_pose
         self.execute_robot(wait=True)
-        '''
+        #'''
 
     def unstow_left(self):
         rospy.loginfo("Switching LEFT arm to GRIPPER mode")
+        #'''
         # Point the peg inwards (flip the wrist back)
         self.left_arm_joint_targets[5] = 0.0
+        # Set LEFT arm
+        self.robot.SetDOFValues(self.left_arm_joint_targets, self.robot.GetManipulators()[0].GetArmIndices())
+        # Get the transform for the left end effector
+        Ttorso = self.torso_link.GetTransform()
+        Tleftwrist = self.left_wrist_link.GetTransform()
+        Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
+        left_wrist_pose = PoseFromMatrix(Ttorso_left_wrist)
+        #left_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
+        left_rotation = [0.0,0.0,0.0,0.0]
+        left_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], left_rotation))
+        real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
+        self.left_arm_pose.pose = real_left_wrist_pose
         self.execute_robot(wait=True)
+        #'''
 
     def stow_right(self):
         rospy.loginfo("Switching RIGHT arm to PEG mode")
         # Stow the wrist back to zero
         self.right_arm_joint_targets[6] = 0.0
         self.execute_robot(wait=True)
-        '''
+        # Close the fingers & trigger
+        self.execute_right_gripper(gripper_target="CLOSE", trigger_target="CLOSE")
+        #'''
         # Point the peg outwards (flip the wrist back)
-        self.right_arm_joint_targets[5] = math.pi
+        self.right_arm_joint_targets[5] = -math.pi
         # Set RIGHT arm
         self.robot.SetDOFValues(self.right_arm_joint_targets, self.robot.GetManipulators()[1].GetArmIndices())
         # Get the transform for the right end effector
@@ -548,13 +566,27 @@ class HuboMarkerTeleop:
         real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
         self.right_arm_pose.pose = real_right_wrist_pose
         self.execute_robot(wait=True)
-        '''
+        #'''
 
     def unstow_right(self):
         rospy.loginfo("Switching RIGHT arm to GRIPPER mode")
+        #'''
         # Point the peg inwards (flip the wrist back)
         self.right_arm_joint_targets[5] = 0.0
+        # Set RIGHT arm
+        self.robot.SetDOFValues(self.right_arm_joint_targets, self.robot.GetManipulators()[1].GetArmIndices())
+        # Get the transform for the right end effector
+        Ttorso = self.torso_link.GetTransform()
+        Trightwrist = self.right_wrist_link.GetTransform()
+        Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
+        right_wrist_pose = PoseFromMatrix(Ttorso_right_wrist)
+        #right_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
+        right_rotation = [0.0,0.0,0.0,0.0]
+        right_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], right_rotation))
+        real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
+        self.right_arm_pose.pose = real_right_wrist_pose
         self.execute_robot(wait=True)
+        #'''
 
     def execute_left_gripper(self, gripper_target=None, trigger_target=None):
         if (gripper_target != None):
@@ -823,7 +855,10 @@ class HuboMarkerTeleop:
         else:
             ik_solution = self.left_peg_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
         # Zero the last joint in the IK solution (since it doesn't actually exist)
-        ik_solution[6] = 0.0
+        try:
+            ik_solution[6] = 0.0
+        except:
+            pass
         #print "IK solution for the left arm: " + str(ik_solution)
         return ik_solution
 
@@ -844,7 +879,10 @@ class HuboMarkerTeleop:
         else:
             ik_solution = self.right_peg_ikfast.manip.FindIKSolution(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
         # Zero the last joint in the IK solution (since it doesn't actually exist)
-        ik_solution[6] = 0.0
+        try:
+            ik_solution[6] = 0.0
+        except:
+            pass
         #print "IK solution for the right arm: " + str(ik_solution)
         return ik_solution
 
