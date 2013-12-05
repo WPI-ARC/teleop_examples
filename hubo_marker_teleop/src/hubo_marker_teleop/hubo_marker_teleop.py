@@ -47,16 +47,18 @@ class HuboMarkerTeleop:
         self.active_joints = active_joints
         self.joint_lock = threading.Lock()
         self.latest_joint_state = None
+        self.current_trajectory = None
         self.execution_scaling_time = 1.0
+        self.min_exec_time = 4.0
         self.preview_scaling_factor = 0.25
         self.left_arm_joint_targets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.right_arm_joint_targets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         self.left_gripper_joint_targets = [0.0, 0.0]
         self.right_gripper_joint_targets = [0.0, 0.0]
-        self.left_gripper_options = ["OPEN","CLOSE","OPEN TRIGGER","CLOSE TRIGGER","EXEC","SWITCH TO PEG"]
-        self.right_gripper_options = ["OPEN","CLOSE","OPEN TRIGGER","CLOSE TRIGGER","EXEC","SWITCH TO PEG"]
-        self.left_peg_options = ["EXEC","SWITCH TO GRIPPER"]
-        self.right_peg_options = ["EXEC","SWITCH TO GRIPPER"]
+        self.left_gripper_options = ["OPEN","CLOSE","OPEN TRIGGER","CLOSE TRIGGER","EXEC","SWITCH TO PEG","CONFIRM","ABORT"]
+        self.right_gripper_options = ["OPEN","CLOSE","OPEN TRIGGER","CLOSE TRIGGER","EXEC","SWITCH TO PEG","CONFIRM","ABORT"]
+        self.left_peg_options = ["EXEC","SWITCH TO GRIPPER","CONFIRM","ABORT"]
+        self.right_peg_options = ["EXEC","SWITCH TO GRIPPER","CONFIRM","ABORT"]
         self.left_mode = self.GRIPPER
         self.right_mode = self.GRIPPER
         self.left_dragging = False
@@ -209,6 +211,13 @@ class HuboMarkerTeleop:
         if (self.enable_exec):
             while (self.latest_joint_state == None):
                 rate.sleep()
+            # Set the arm targets to the current joint angles
+            with self.joint_lock:
+                self.left_arm_joint_targets = self.extract_left_arm(self.latest_joint_state.name, self.latest_joint_state.position)
+                self.right_arm_joint_targets = self.extract_right_arm(self.latest_joint_state.name, self.latest_joint_state.position)
+            rospy.loginfo("Set arm targets to current joint states")
+            print self.left_arm_joint_targets
+            print self.right_arm_joint_targets
         rospy.loginfo("HuboMarkerTeleop loaded")
         # Spin forever
         while not rospy.is_shutdown():
@@ -272,6 +281,10 @@ class HuboMarkerTeleop:
             elif (self.left_gripper_options[feedback.menu_entry_id - 1] == "SWITCH TO PEG"):
                 self.left_mode = self.PEG
                 self.stow_left()
+            elif (self.left_gripper_options[feedback.menu_entry_id - 1] == "CONFIRM"):
+                self.execute_stored()
+            elif (self.left_gripper_options[feedback.menu_entry_id - 1] == "ABORT"):
+                self.abort_stored()
             else:
                 rospy.logerr("Unrecognized menu option")
         else:
@@ -302,6 +315,10 @@ class HuboMarkerTeleop:
             elif (self.left_peg_options[feedback.menu_entry_id - 1] == "SWITCH TO GRIPPER"):
                 self.left_mode = self.GRIPPER
                 self.unstow_left()
+            elif (self.left_peg_options[feedback.menu_entry_id - 1] == "CONFIRM"):
+                self.execute_stored()
+            elif (self.left_peg_options[feedback.menu_entry_id - 1] == "ABORT"):
+                self.abort_stored()
             else:
                 rospy.logerr("Unrecognized menu option")
         else:
@@ -340,6 +357,10 @@ class HuboMarkerTeleop:
             elif (self.right_gripper_options[feedback.menu_entry_id - 1] == "SWITCH TO PEG"):
                 self.right_mode = self.PEG
                 self.stow_right()
+            elif (self.right_gripper_options[feedback.menu_entry_id - 1] == "CONFIRM"):
+                self.execute_stored()
+            elif (self.right_gripper_options[feedback.menu_entry_id - 1] == "ABORT"):
+                self.abort_stored()
             else:
                 rospy.logerr("Unrecognized menu option")
         else:
@@ -370,6 +391,10 @@ class HuboMarkerTeleop:
             elif (self.right_peg_options[feedback.menu_entry_id - 1] == "SWITCH TO GRIPPER"):
                 self.right_mode = self.GRIPPER
                 self.unstow_right()
+            elif (self.right_peg_options[feedback.menu_entry_id - 1] == "CONFIRM"):
+                self.execute_stored()
+            elif (self.right_peg_options[feedback.menu_entry_id - 1] == "ABORT"):
+                self.abort_stored()
             else:
                 rospy.logerr("Unrecognized menu option")
         else:
@@ -379,11 +404,63 @@ class HuboMarkerTeleop:
         with self.joint_lock:
             self.latest_joint_state = msg
 
+    def execute_stored(self):
+        if (self.current_trajectory == None):
+            rospy.logwarn("No trajectory to execute")
+        else:
+            # Build the goal to execute
+            if (self.enable_exec):
+                trajectory_goal = JointTrajectoryGoal()
+                trajectory_goal.trajectory = self.current_trajectory
+                self.joint_traj_client.send_goal(trajectory_goal)
+                if (self.trajectory_wait):
+                    exec_time = self.current_trajectory.points[-1].time_from_start.to_sec()
+                    self.joint_traj_client.wait_for_result(rospy.Duration(exec_time + 2.0))
+                rospy.loginfo("Execution complete")
+            else:
+                rospy.logwarn("Execution disabled")
+            # Flush the trajectory
+            self.current_trajectory = None
+
+    def abort_stored(self):
+        if (self.current_trajectory == None):
+            rospy.logwarn("No trajectory to abort")
+        else:
+            rospy.logwarn("Aborting execution")
+            # Set the robot in the last safe configuration
+            safe_point = self.current_trajectory.points[0]
+            positions = safe_point.positions
+            left_arm = self.extract_left_arm(self.current_trajectory.joint_names, positions)
+            right_arm = self.extract_right_arm(self.current_trajectory.joint_names, positions)
+            # Set LEFT arm
+            self.robot.SetDOFValues(left_arm, self.robot.GetManipulators()[0].GetArmIndices())
+            # Set RIGHT arm
+            self.robot.SetDOFValues(right_arm, self.robot.GetManipulators()[1].GetArmIndices())
+            # Get the transforms for each end effector
+            Ttorso = self.torso_link.GetTransform()
+            Tleftwrist = self.left_wrist_link.GetTransform()
+            Trightwrist = self.right_wrist_link.GetTransform()
+            Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
+            Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
+            # Update the stored poses to the safe ones
+            self.left_arm_pose.pose = self.left_wrist_OpenRAVE_to_ROS(Ttorso_left_wrist)
+            self.left_arm_joint_targets = left_arm
+            self.right_arm_pose.pose = self.right_wrist_OpenRAVE_to_ROS(Ttorso_right_wrist)
+            self.right_arm_joint_targets = right_arm
+            # Wait for OpenRAVE to catch up
+            self.robot.WaitForController(0)
+            self.robot.GetController().Reset(0)
+            rospy.loginfo("Reset markers to initial state")
+            self.current_trajectory = None
+
     def execute_robot(self, wait=False, execution_time=0.0):
         # Build trajectory
         current_joint_state = None
         with self.joint_lock:
             current_joint_state = deepcopy(self.latest_joint_state)
+        rospy.loginfo("Building trajectory to goals")
+        print self.left_arm_joint_targets
+        print self.right_arm_joint_targets
         #self.active_joints = current_joint_state.name
         target_joint_state = self.build_target_joint_state(current_joint_state, self.left_arm_joint_targets, self.right_arm_joint_targets, self.left_gripper_joint_targets, self.right_gripper_joint_targets)
         trajectory = self.build_full_trajectory(current_joint_state.name, current_joint_state.position, target_joint_state, execution_time)
@@ -420,27 +497,16 @@ class HuboMarkerTeleop:
                     Trightwrist = self.right_wrist_link.GetTransform()
                     Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
                     Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
-                    left_wrist_pose = PoseFromMatrix(Ttorso_left_wrist)
-                    right_wrist_pose = PoseFromMatrix(Ttorso_right_wrist)
-                    # Convert the orientation of the OpenRAVE pose to ROS
-                    left_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
-                    left_rotation = [0.0,0.0,0.0,0.0]
-                    left_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], left_rotation))
-                    right_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
-                    right_rotation = [0.0,0.0,0.0,0.0]
-                    right_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], right_rotation))
-                    real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
-                    real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
                     # Update the stored poses to the safe ones
-                    self.left_arm_pose.pose = real_left_wrist_pose
+                    self.left_arm_pose.pose = self.left_wrist_OpenRAVE_to_ROS(Ttorso_left_wrist)
                     self.left_arm_joint_targets = left_arm
-                    self.right_arm_pose.pose = real_right_wrist_pose
+                    self.right_arm_pose.pose = self.right_wrist_OpenRAVE_to_ROS(Ttorso_right_wrist)
                     self.right_arm_joint_targets = right_arm
                     # Wait for OpenRAVE to catch up
                     self.robot.WaitForController(0)
                     self.robot.GetController().Reset(0)
                     rospy.loginfo("Set markers to last safe state")
-                    break
+                    return
                 # Wait for OpenRAVE to catch up
                 self.robot.WaitForController(0)
                 self.robot.GetController().Reset(0)
@@ -448,67 +514,17 @@ class HuboMarkerTeleop:
                 rospy.sleep(self.preview_scaling_factor * (1.0 / 30.0))
         rospy.loginfo("Safe trajectory with " + str(len(trajectory.points)) + " states")
         exec_time = trajectory.points[-1].time_from_start.to_sec()
-        rospy.loginfo("Execution time: " + str(exec_time) + " seconds")
-        # Ask the user to confirm execution
-        confirm_exec = True
-        confirm = raw_input("Confirm execution - Y/n: ")
-        # Check value
-        if (confirm.lower() == "n" or confirm.lower() == "no"):
-            confirm_exec = False
-        if (not confirm_exec):
-            rospy.logwarn("Aborting execution")
-            # Set the robot in the last safe configuration
-            safe_point = trajectory.points[0]
-            positions = safe_point.positions
-            left_arm = self.extract_left_arm(trajectory.joint_names, positions)
-            right_arm = self.extract_right_arm(trajectory.joint_names, positions)
-            # Set LEFT arm
-            self.robot.SetDOFValues(left_arm, self.robot.GetManipulators()[0].GetArmIndices())
-            # Set RIGHT arm
-            self.robot.SetDOFValues(right_arm, self.robot.GetManipulators()[1].GetArmIndices())
-            # Get the transforms for each end effector
-            Ttorso = self.torso_link.GetTransform()
-            Tleftwrist = self.left_wrist_link.GetTransform()
-            Trightwrist = self.right_wrist_link.GetTransform()
-            Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
-            Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
-            left_wrist_pose = PoseFromMatrix(Ttorso_left_wrist)
-            right_wrist_pose = PoseFromMatrix(Ttorso_right_wrist)
-            # Convert the orientation of the OpenRAVE pose to ROS
-            #left_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
-            left_rotation = [0.0,0.0,0.0,0.0]
-            left_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], left_rotation))
-            #right_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
-            right_rotation = [0.0,0.0,0.0,0.0]
-            right_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], right_rotation))
-            real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
-            real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
-            # Update the stored poses to the safe ones
-            self.left_arm_pose.pose = real_left_wrist_pose
-            self.left_arm_joint_targets = left_arm
-            self.right_arm_pose.pose = real_right_wrist_pose
-            self.right_arm_joint_targets = right_arm
-            # Wait for OpenRAVE to catch up
-            self.robot.WaitForController(0)
-            self.robot.GetController().Reset(0)
-            rospy.loginfo("Reset markers to initial state")
-            return
-        # Build the goal to execute
-        if (self.enable_exec):
-            trajectory_goal = JointTrajectoryGoal()
-            trajectory_goal.trajectory = trajectory
-            self.joint_traj_client.send_goal(trajectory_goal)
-            if (wait):
-                self.joint_traj_client.wait_for_result(rospy.Duration(exec_time + 2.0))
-            rospy.loginfo("Execution complete")
-        else:
-            rospy.logwarn("Execution disabled")
+        rospy.loginfo("Execution time would be: " + str(exec_time) + " seconds")
+        # Store the trajectory
+        self.current_trajectory = trajectory
+        self.trajectory_wait = wait
 
     def stow_left(self):
         rospy.loginfo("Switching LEFT arm to PEG mode")
         # Stow the wrist back to zero
         self.left_arm_joint_targets[6] = -math.pi / 2.0
         self.execute_robot(wait=True)
+        self.execute_stored()
         # Close the fingers & trigger
         self.execute_left_gripper(gripper_target="CLOSE", trigger_target="CLOSE")
         #'''
@@ -520,13 +536,9 @@ class HuboMarkerTeleop:
         Ttorso = self.torso_link.GetTransform()
         Tleftwrist = self.left_wrist_link.GetTransform()
         Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
-        left_wrist_pose = PoseFromMatrix(Ttorso_left_wrist)
-        #left_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
-        left_rotation = [0.0,0.0,0.0,0.0]
-        left_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], left_rotation))
-        real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
-        self.left_arm_pose.pose = real_left_wrist_pose
+        self.left_arm_pose.pose = self.left_wrist_OpenRAVE_to_ROS(Ttorso_left_wrist)
         self.execute_robot(wait=True)
+        self.execute_stored()
         #'''
 
     def unstow_left(self):
@@ -540,13 +552,9 @@ class HuboMarkerTeleop:
         Ttorso = self.torso_link.GetTransform()
         Tleftwrist = self.left_wrist_link.GetTransform()
         Ttorso_left_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Tleftwrist)
-        left_wrist_pose = PoseFromMatrix(Ttorso_left_wrist)
-        #left_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
-        left_rotation = [0.0,0.0,0.0,0.0]
-        left_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], left_rotation))
-        real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
-        self.left_arm_pose.pose = real_left_wrist_pose
+        self.left_arm_pose.pose = self.left_wrist_OpenRAVE_to_ROS(Ttorso_left_wrist)
         self.execute_robot(wait=True)
+        self.execute_stored()
         #'''
 
     def stow_right(self):
@@ -554,6 +562,7 @@ class HuboMarkerTeleop:
         # Stow the wrist back to zero
         self.right_arm_joint_targets[6] = math.pi / 2.0
         self.execute_robot(wait=True)
+        self.execute_stored()
         # Close the fingers & trigger
         self.execute_right_gripper(gripper_target="CLOSE", trigger_target="CLOSE")
         #'''
@@ -565,13 +574,9 @@ class HuboMarkerTeleop:
         Ttorso = self.torso_link.GetTransform()
         Trightwrist = self.right_wrist_link.GetTransform()
         Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
-        right_wrist_pose = PoseFromMatrix(Ttorso_right_wrist)
-        #right_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
-        right_rotation = [0.0,0.0,0.0,0.0]
-        right_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], right_rotation))
-        real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
-        self.right_arm_pose.pose = real_right_wrist_pose
+        self.right_arm_pose.pose = self.right_wrist_OpenRAVE_to_ROS(Ttorso_right_wrist)
         self.execute_robot(wait=True)
+        self.execute_stored()
         #'''
 
     def unstow_right(self):
@@ -585,14 +590,70 @@ class HuboMarkerTeleop:
         Ttorso = self.torso_link.GetTransform()
         Trightwrist = self.right_wrist_link.GetTransform()
         Ttorso_right_wrist = numpy.dot(numpy.linalg.inv(Ttorso), Trightwrist)
-        right_wrist_pose = PoseFromMatrix(Ttorso_right_wrist)
-        #right_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
-        right_rotation = [0.0,0.0,0.0,0.0]
-        right_adjustment = PoseFromTransform(TransformFromComponents([0.0,0.0,0.0], right_rotation))
-        real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
-        self.right_arm_pose.pose = real_right_wrist_pose
+        self.right_arm_pose.pose = self.right_wrist_OpenRAVE_to_ROS(Ttorso_right_wrist)
         self.execute_robot(wait=True)
+        self.execute_stored()
         #'''
+
+    ####################################################################################################
+
+    def left_wrist_ROS_to_OpenRAVE(self, ros_pose):
+        left_translation = [0.1,0.0,0.0]
+        left_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
+        adjustment = PoseFromTransform(TransformFromComponents(left_translation, left_rotation))
+        real_target_pose = ComposePoses(ros_pose, adjustment)
+        Ttorso = self.torso_link.GetTransform()
+        Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
+        return Tgripper
+
+    def right_wrist_ROS_to_OpenRAVE(self, ros_pose):
+        right_translation = [0.1,0.0,0.0]
+        right_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
+        adjustment = PoseFromTransform(TransformFromComponents(right_translation, right_rotation))
+        real_target_pose = ComposePoses(ros_pose, adjustment)
+        Ttorso = self.torso_link.GetTransform()
+        Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
+        return Tgripper
+
+    def left_peg_ROS_to_OpenRAVE(self, ros_pose):
+        left_translation = [-0.1,0.0,0.0]
+        left_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
+        adjustment = PoseFromTransform(TransformFromComponents(left_translation, left_rotation))
+        real_target_pose = ComposePoses(ros_pose, adjustment)
+        Ttorso = self.torso_link.GetTransform()
+        Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
+        return Tgripper
+
+    def right_peg_ROS_to_OpenRAVE(self, ros_pose):
+        right_translation = [-0.1,0.0,0.0]
+        right_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
+        adjustment = PoseFromTransform(TransformFromComponents(right_translation, right_rotation))
+        real_target_pose = ComposePoses(ros_pose, adjustment)
+        Ttorso = self.torso_link.GetTransform()
+        Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
+        return Tgripper
+
+    def left_wrist_OpenRAVE_to_ROS(self, openrave_transform):
+        left_wrist_pose = PoseFromMatrix(openrave_transform)
+        #left_rotation = quaternion_about_axis(math.pi / 2.0, (0,0,1))
+        #left_translation = [0.1,0.0,0.0]
+        left_translation = [0.0,0.0,0.0]
+        left_rotation = [0.0,0.0,0.0,0.0]
+        left_adjustment = PoseFromTransform(InvertTransform(TransformFromComponents(left_translation, left_rotation)))
+        real_left_wrist_pose = ComposePoses(left_wrist_pose, left_adjustment)
+        return real_left_wrist_pose
+
+    def right_wrist_OpenRAVE_to_ROS(self, openrave_transform):
+        right_wrist_pose = PoseFromMatrix(openrave_transform)
+        #right_rotation = quaternion_about_axis(-math.pi / 2.0, (0,0,1))
+        #right_translation = [0.1,0.0,0.0]
+        right_translation = [0.0,0.0,0.0]
+        right_rotation = [0.0,0.0,0.0,0.0]
+        right_adjustment = PoseFromTransform(InvertTransform(TransformFromComponents(right_translation, right_rotation)))
+        real_right_wrist_pose = ComposePoses(right_wrist_pose, right_adjustment)
+        return real_right_wrist_pose
+
+    ####################################################################################################
 
     def execute_left_gripper(self, gripper_target=None, trigger_target=None):
         if (gripper_target != None):
@@ -604,6 +665,7 @@ class HuboMarkerTeleop:
             return
         # We open and close grippers for 6 seconds
         self.execute_robot(wait=True, execution_time=6.0)
+        self.execute_stored()
         # Clear the targets
         self.left_gripper_joint_targets = [0.0, 0.0]
 
@@ -617,6 +679,7 @@ class HuboMarkerTeleop:
             return
         # We open and close grippers for 6 seconds
         self.execute_robot(wait=True, execution_time=6.0)
+        self.execute_stored()
         # Clear the targets
         self.right_gripper_joint_targets = [0.0, 0.0]
 
@@ -729,6 +792,9 @@ class HuboMarkerTeleop:
         exec_time = self.execution_scaling_time * self.euclidean_distance(current_joints, target_joint_state)
         if (execution_time > exec_time):
             exec_time = execution_time
+        if (exec_time < self.min_exec_time):
+            rospy.logwarn("Extending execution time from " + str(exec_time) + " to minimum " + str(self.min_exec_time))
+            exec_time = self.min_exec_time
         num_intermediate_points = int(exec_time * 30.0)
         full_points = self.interpolate_trajectory(current_names, current_joints, target_joint_state, num_intermediate_points)
         new_traj = JointTrajectory()
@@ -807,6 +873,7 @@ class HuboMarkerTeleop:
         return right_arm
 
     def compute_left_arm(self, target_pose, best=False):
+        '''
         #print "Attempting to compute an IKfast solution for the left arm"
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
@@ -816,6 +883,8 @@ class HuboMarkerTeleop:
         # Convert the ROS pose to an OpenRAVE transform
         Ttorso = self.torso_link.GetTransform()
         Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
+        '''
+        Tgripper = self.left_wrist_ROS_to_OpenRAVE(target_pose)
         # Query IKFAST
         if (best):
             ik_solutions = self.left_arm_ikfast.manip.FindIKSolutions(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
@@ -826,6 +895,7 @@ class HuboMarkerTeleop:
         return ik_solution
 
     def compute_right_arm(self, target_pose, best=False):
+        '''
         #print "Attempting to compute an IKfast solution for the right arm"
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
@@ -835,6 +905,8 @@ class HuboMarkerTeleop:
         # Convert the ROS pose to an OpenRAVE transform
         Ttorso = self.torso_link.GetTransform()
         Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
+        '''
+        Tgripper = self.right_wrist_ROS_to_OpenRAVE(target_pose)
         # Query IKFAST
         if (best):
             ik_solutions = self.right_arm_ikfast.manip.FindIKSolutions(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
@@ -845,6 +917,7 @@ class HuboMarkerTeleop:
         return ik_solution
 
     def compute_left_peg(self, target_pose, best=False):
+        '''
         #print "Attempting to compute an IKfast solution for the left arm"
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
@@ -854,6 +927,8 @@ class HuboMarkerTeleop:
         # Convert the ROS pose to an OpenRAVE transform
         Ttorso = self.torso_link.GetTransform()
         Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
+        '''
+        Tgripper = self.left_peg_ROS_to_OpenRAVE(target_pose)
         # Query IKFAST
         if (best):
             ik_solutions = self.left_peg_ikfast.manip.FindIKSolutions(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
@@ -869,6 +944,7 @@ class HuboMarkerTeleop:
         return ik_solution
 
     def compute_right_peg(self, target_pose, best=False):
+        '''
         #print "Attempting to compute an IKfast solution for the right arm"
         ik_solution = None
         # Rotate ROS pose to match OpenRAVE orientation
@@ -878,6 +954,8 @@ class HuboMarkerTeleop:
         # Convert the ROS pose to an OpenRAVE transform
         Ttorso = self.torso_link.GetTransform()
         Tgripper = numpy.dot(Ttorso, PoseToMatrix(real_target_pose))
+        '''
+        Tgripper = self.right_peg_ROS_to_OpenRAVE(target_pose)
         # Query IKFAST
         if (best):
             ik_solutions = self.right_peg_ikfast.manip.FindIKSolutions(array(Tgripper),IkFilterOptions.CheckEnvCollisions)
@@ -990,6 +1068,9 @@ class HuboMarkerTeleop:
         elif ("right" in marker_name.lower()):
             marker.mesh_resource = self.right_end_effector_mesh
             marker.color.g = 1.0
+        # Set blue color channel if there's a trajectory to confirm
+        if (self.current_trajectory != None):
+            marker.color.b = 1.0
         marker.pose = marker_pose.pose
         #Set the scale of the marker -- 1x1x1 here means native scale
         marker.scale.x = 1.0
